@@ -13,6 +13,57 @@
 
 namespace wafflepp
 {
+  namespace helpers
+  {
+    inline unsigned char fromHex(unsigned char ch)
+    {
+      if (ch <= '9' && ch >= '0')
+      {
+        ch -= '0';
+      }
+      else if (ch <= 'f' && ch >= 'a')
+      {
+        ch -= 'a' - 10;
+      }
+      else if (ch <= 'F' && ch >= 'A')
+      {
+        ch -= 'A' - 10;
+      }
+      else
+      {
+        ch = 0;
+      }
+      return ch;
+    }
+
+    const std::string urldecode(const std::string &str)
+    {
+      // based on http://dlib.net/dlib/server/server_http.cpp.html
+      std::string result;
+      const std::size_t str_size = str.size();
+      for (std::size_t i{0}; i < str_size; ++i)
+      {
+        if (str[i] == '+')
+        {
+          result += ' ';
+        }
+        else if (str[i] == '%' && str_size > i + 2)
+        {
+          const unsigned char ch1 = fromHex(str[i + 1]);
+          const unsigned char ch2 = fromHex(str[i + 2]);
+          const unsigned char ch = (ch1 << 4) | ch2;
+          result += ch;
+          i += 2;
+        }
+        else
+        {
+          result += str[i];
+        }
+      }
+      return result;
+    }
+  } // namespace helpers
+
   struct Cookie
   {
     Cookie(const std::string &key_, const std::string &value_)
@@ -38,12 +89,26 @@ namespace wafflepp
     std::string method{};
     std::string url{};
     std::string body{};
+    std::string content_type{};
+    bool is_json{false};
+    bool is_multipart_form{false};
+    nlohmann::json json{};
+
     std::vector<std::string> params{};
     std::unordered_map<std::string, std::string> args{};
-    std::vector<Cookie> cookies{};
+    std::unordered_map<std::string, std::string> cookies{};
 
     struct FormItem
     {
+      FormItem() {}
+      FormItem(const std::string &data_) : data(data_) {}
+      void setContentType(const std::string &content)
+      {
+        content_type = content;
+        binary = content.find("text") == std::string::npos;
+      }
+
+      std::string disposition{};
       std::string data{};
       std::string content_type{};
       std::string filename{};
@@ -66,7 +131,11 @@ namespace wafflepp
       constexpr std::size_t DEFAULT_ARG_VEC_CAPACITY{5};
       params.reserve(DEFAULT_ARG_VEC_CAPACITY);
       args.reserve(DEFAULT_ARG_VEC_CAPACITY);
+      cookies.reserve(DEFAULT_ARG_VEC_CAPACITY);
+      form.reserve(DEFAULT_ARG_VEC_CAPACITY);
 
+      parseContentType();
+      parseJsonBody();
       parseQuery();
       parseCookies();
       parseForm();
@@ -85,6 +154,35 @@ namespace wafflepp
       {
         const std::ssub_match &sub_match = matches[match_index];
         params.emplace_back(sub_match.str());
+      }
+    }
+
+  private:
+    void parseContentType()
+    {
+      const auto raw = http_request_header(request, "Content-Type");
+      content_type = std::string(raw.buf, raw.len);
+      if (content_type == "application/json")
+      {
+        is_json = true;
+      }
+      else if (content_type.find("multipart/form-data") == 0)
+      {
+        is_multipart_form = true;
+      }
+    }
+
+    void parseJsonBody()
+    {
+      if (is_json)
+      {
+        try
+        {
+          json = nlohmann::json::parse(body);
+        }
+        catch (...)
+        {
+        }
       }
     }
 
@@ -149,18 +247,193 @@ namespace wafflepp
 
         const auto &value = cookie.substr(start, pos_semi - start);
 
-        cookies.emplace_back(key, value);
+        cookies[key] = value;
 
         start = pos_semi + 1;
       }
     }
 
-    void parseForm() {}
+    void parseForm()
+    {
+      if (is_json)
+      {
+        return;
+      }
+
+      if (is_multipart_form)
+      {
+        parseMultipartForm();
+      }
+      else
+      {
+        parseURLEncodedForm();
+      }
+    }
+
+    void parseURLEncodedForm()
+    {
+      const std::size_t body_size = body.size();
+      if (body_size == 0)
+      {
+        return;
+      }
+
+      auto start = 0UL;
+      while (start < body_size)
+      {
+        const auto pos_eq = body.find("=", start);
+        if (pos_eq == std::string::npos)
+        {
+          break;
+        }
+
+        const auto &key = body.substr(start, pos_eq - start);
+
+        auto pos_amp = body.find("&", start);
+        if (pos_amp == std::string::npos)
+        {
+          pos_amp = body_size;
+        }
+
+        start = pos_eq + 1;
+
+        const auto &value = body.substr(start, pos_amp - start);
+
+        form.emplace(key, helpers::urldecode(value));
+
+        start = pos_amp + 1;
+      }
+    }
+
+    void parseMultipartForm()
+    {
+      const std::size_t body_size = body.size();
+      if (body_size == 0)
+      {
+        return;
+      }
+
+      std::smatch boundary_matches{};
+      std::string boundary{};
+      if (std::regex_match(content_type, boundary_matches,
+                           std::regex("^multipart/form-data; boundary=(.*)")))
+      {
+        if (boundary_matches.size() > 1)
+        {
+          boundary = boundary_matches[1].str();
+        }
+      }
+
+      if (boundary.empty())
+      {
+        return;
+      }
+
+      const std::size_t boundary_size = boundary.size();
+      auto start = boundary_size + 4;
+
+      while (start < body_size)
+      {
+        const auto pos_boundary = body.find(boundary, start);
+        if (pos_boundary == std::string::npos)
+        {
+          break;
+        }
+
+        auto start1 = 0UL;
+        auto end1 = start;
+
+        FormItem form_item{};
+
+        const std::string CONTENT_DISP_STRING{"Content-Disposition: "};
+        start1 = body.find(CONTENT_DISP_STRING, end1);
+        if (start1 == std::string::npos)
+        {
+          break;
+        }
+        start1 += CONTENT_DISP_STRING.size();
+
+        end1 = body.find(";", start1);
+        if (end1 == std::string::npos)
+        {
+          break;
+        }
+
+        form_item.disposition = body.substr(start1, end1 - start1);
+
+        if (form_item.disposition == "form-data")
+        {
+
+          const std::string NAME_STRING{"name=\""};
+          start1 = body.find(NAME_STRING, end1);
+          if (start1 == std::string::npos)
+          {
+            break;
+          }
+          start1 += NAME_STRING.size();
+
+          end1 = body.find("\"", start1);
+          if (end1 == std::string::npos)
+          {
+            break;
+          }
+
+          const auto &name = body.substr(start1, end1 - start1);
+
+          if (body[end1 + 1] == ';')
+          {
+            const std::string FILENAME_STRING{"; filename=\""};
+            start1 = body.find(FILENAME_STRING, end1);
+            if (start1 != std::string::npos)
+            {
+              start1 += FILENAME_STRING.size();
+              end1 = body.find("\"", start1);
+              if (end1 == std::string::npos)
+              {
+                break;
+              }
+
+              form_item.filename = body.substr(start1, end1 - start1);
+            }
+
+            const std::string CONTENT_TYPE_STRING{"Content-Type: "};
+            start1 = body.find(CONTENT_TYPE_STRING, end1);
+            if (start1 != std::string::npos)
+            {
+              start1 += CONTENT_TYPE_STRING.size();
+              end1 = body.find("\r", start1);
+              if (end1 == std::string::npos)
+              {
+                break;
+              }
+
+              form_item.setContentType(body.substr(start1, end1 - start1));
+            }
+          }
+          else
+          {
+            ++end1;
+          }
+
+          start1 = end1 + 4;
+          form_item.data = body.substr(start1, pos_boundary - start1 - 4);
+
+          form.emplace(name, form_item);
+        }
+        else
+        {
+          // TODO handle Content-Disposition not "form-data"
+        }
+
+        start = pos_boundary + boundary_size + 2;
+      }
+    }
   };
   struct Response
   {
     http_response_s *response{nullptr};
     std::vector<Cookie> cookies{};
+    bool finished{false};
 
     Response()
     {
@@ -204,8 +477,6 @@ namespace wafflepp
     }
     Response *abort(int status, const std::string &description = "")
     {
-      this->status(status)->content("text/html");
-
       if (description.empty())
       {
         this->body(status_text[status]);
@@ -215,16 +486,22 @@ namespace wafflepp
         this->body(description);
       }
 
-      return this;
+      return this->status(status);
     }
     void finish(const std::unique_ptr<Request> &req)
     {
+      if (finished)
+      {
+        return;
+      }
+
       const auto &cookie = buildCookieString();
       if (!cookie.empty())
       {
         http_response_header(response, "Set-Cookie", cookie.c_str());
       }
       http_respond(req->request, response);
+      finished = true;
     }
 
     Response *cookie(const std::string &key, const std::string &value,
@@ -321,6 +598,11 @@ namespace wafflepp
             try
             {
               fn->second(req, res);
+
+              if (!res->finished)
+              {
+                res->finish(req);
+              }
             }
             catch (const std::exception &err)
             {
@@ -422,6 +704,13 @@ int main()
             res->json({{"key", "value"}})->finish(req);
           });
 
+  app.post("/json",
+           [](const std::unique_ptr<wafflepp::Request> &req,
+              const std::unique_ptr<wafflepp::Response> &res) {
+             std::cout << req->json << std::endl;
+             (void)res;
+           });
+
   app.get("/error",
           [](const std::unique_ptr<wafflepp::Request> &req,
              const std::unique_ptr<wafflepp::Response> &res) {
@@ -430,6 +719,21 @@ int main()
             (void)req;
             (void)res;
           });
+
+  app.post("/form",
+           [](const std::unique_ptr<wafflepp::Request> &req,
+              const std::unique_ptr<wafflepp::Response> &res) {
+             for (const auto &item : req->form)
+             {
+               std::cout << item.first << ": "
+                         << item.second.data << " "
+                         << item.second.filename << " "
+                         << item.second.content_type
+                         << std::endl;
+             }
+
+             (void)res;
+           });
 
   app.listen(8080);
 }

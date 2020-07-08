@@ -1,7 +1,7 @@
 # wafflepp
 
 - Lightweight C++ web framework
-- Inspired by [waffle](https://github.com/benglard/waffle)
+- Inspired by [waffle](https://github.com/benglard/waffle) which is inspired by [express](https://expressjs.com/)
 - Based on [httpserver.h](https://github.com/jeremycw/httpserver.h)
 
 ## Examples
@@ -38,5 +38,17 @@ int main()
             res->json({{"key", "value"}})->finish(req);
           });
 
+  app.listen(8080);
 }
 ```
+
+## Features
+
+- Express-like view functions
+- URL regex parameters
+- URL query arguments
+- Cookies 🍪
+- Redirects
+- JSON parsing/responses
+- Form parsing
+- Minimal error handling
