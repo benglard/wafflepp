@@ -2,6 +2,7 @@
 
 #include "httpserver.h"
 #include "json.hpp"
+#include "render.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -732,8 +733,48 @@ int main()
                          << std::endl;
              }
 
-             (void)res;
+             res->body("Uploaded!")->finish(req);
            });
+
+  app.get("/render",
+          [](const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            res
+                ->content("text/html")
+                ->body(
+                    html(
+                        head(title("Title")),
+                        body(p("Hello World!"))))
+                ->finish(req);
+          });
+
+  app.get("/form",
+          [](const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            res
+                ->content("text/html")
+                ->body(
+                    html(body(form(
+                        {{"action", "/form"},
+                         {"method", "POST"},
+                         {"enctype", "multipart/form-data"}},
+                        p(input(
+                            {{"type", "text"},
+                             {"name", "firstname"},
+                             {"placeholder", "First Name"}})),
+                        p(input(
+                            {{"type", "text"},
+                             {"name", "lastname"},
+                             {"placeholder", "Last Name"}})),
+                        p(input(
+                            {{"type", "file"},
+                             {"name", "file"}})),
+                        p(input(
+                            {{"type", "submit"}}, "Upload"))))))
+                ->finish(req);
+          });
 
   app.listen(8080);
 }
