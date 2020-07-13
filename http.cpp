@@ -11,6 +11,7 @@
 #include <functional>
 #include <csignal>
 #include <regex>
+#include <thread>
 
 namespace wafflepp
 {
@@ -63,6 +64,158 @@ namespace wafflepp
       }
       return result;
     }
+
+    static char encoding_table[] = {
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+        'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+        'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+        'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
+        'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+        'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+        'w', 'x', 'y', 'z', '0', '1', '2', '3',
+        '4', '5', '6', '7', '8', '9', '+', '/'};
+
+    static int mod_table[] = {0, 2, 1};
+
+    inline unsigned int rol(
+        const unsigned int value,
+        const unsigned int steps)
+    {
+      return ((value << steps) | (value >> (32 - steps)));
+    }
+
+    inline void clearbuffer(unsigned int *buffer)
+    {
+      int pos = 16;
+      for (; --pos >= 0;)
+      {
+        buffer[pos] = 0;
+      }
+    }
+
+    inline void innerhash(unsigned int *result, unsigned int *w)
+    {
+      unsigned int
+          a = result[0],
+          b = result[1], c = result[2],
+          d = result[3], e = result[4];
+      int round = 0;
+#define sha1macro(func, val)                                        \
+  {                                                                 \
+    const unsigned int t = rol(a, 5) + (func) + e + val + w[round]; \
+    e = d;                                                          \
+    d = c;                                                          \
+    c = rol(b, 30);                                                 \
+    b = a;                                                          \
+    a = t;                                                          \
+  }
+      while (round < 16)
+      {
+        sha1macro((b & c) | (~b & d), 0x5a827999)++ round;
+      }
+      while (round < 20)
+      {
+        w[round] = rol(
+            (w[round - 3] ^ w[round - 8] ^ w[round - 14] ^ w[round - 16]), 1);
+        sha1macro((b & c) | (~b & d), 0x5a827999)++ round;
+      }
+      while (round < 40)
+      {
+        w[round] = rol(
+            (w[round - 3] ^ w[round - 8] ^ w[round - 14] ^ w[round - 16]), 1);
+        sha1macro(b ^ c ^ d, 0x6ed9eba1)++ round;
+      }
+      while (round < 60)
+      {
+        w[round] = rol(
+            (w[round - 3] ^ w[round - 8] ^ w[round - 14] ^ w[round - 16]), 1);
+        sha1macro((b & c) | (b & d) | (c & d), 0x8f1bbcdc)++ round;
+      }
+      while (round < 80)
+      {
+        w[round] = rol(
+            (w[round - 3] ^ w[round - 8] ^ w[round - 14] ^ w[round - 16]), 1);
+        sha1macro(b ^ c ^ d, 0xca62c1d6)++ round;
+      }
+#undef sha1macro
+      result[0] += a;
+      result[1] += b;
+      result[2] += c;
+      result[3] += d;
+      result[4] += e;
+    }
+
+    inline void sha1b64(const char *src, char *dest)
+    {
+      // sha1 hash
+      int bytelength = strlen(src);
+      unsigned int result[5] = {
+          0x67452301, 0xefcdab89, 0x98badcfe,
+          0x10325476, 0xc3d2e1f0};
+      const unsigned char *sarray = (const unsigned char *)src;
+      unsigned int w[80];
+
+      const int end_full_blocks = bytelength - 64;
+      int curblock = 0, end_cur_block;
+
+      while (curblock <= end_full_blocks)
+      {
+        end_cur_block = curblock + 64;
+        int roundpos = 0;
+        for (; curblock < end_cur_block; curblock += 4)
+        {
+          w[roundpos++] = (unsigned int)sarray[curblock + 3] | (((unsigned int)sarray[curblock + 2]) << 8) | (((unsigned int)sarray[curblock + 1]) << 16) | (((unsigned int)sarray[curblock]) << 24);
+        }
+        innerhash(result, w);
+      }
+
+      end_cur_block = bytelength - curblock;
+      clearbuffer(w);
+      int lastbytes = 0;
+      for (; lastbytes < end_cur_block; ++lastbytes)
+      {
+        w[lastbytes >> 2] |= (unsigned int)
+                                 sarray[lastbytes + curblock]
+                             << ((3 - (lastbytes & 3)) << 3);
+      }
+      w[lastbytes >> 2] |= 0x80 << ((3 - (lastbytes & 3)) << 3);
+
+      if (end_cur_block >= 56)
+      {
+        innerhash(result, w);
+        clearbuffer(w);
+      }
+
+      w[15] = bytelength << 3;
+      innerhash(result, w);
+
+      unsigned char hash[20];
+      int hashbyte = 20;
+      for (; --hashbyte >= 0;)
+      {
+        hash[hashbyte] = (result[hashbyte >> 2] >> (((3 - hashbyte) & 0x3) << 3)) & 0xff;
+      }
+
+      // Base64 encode
+      int i = 0;
+      int j = 0;
+      while (i < 20)
+      {
+        uint32_t octet_a = i < 20 ? hash[i++] : 0;
+        uint32_t octet_b = i < 20 ? hash[i++] : 0;
+        uint32_t octet_c = i < 20 ? hash[i++] : 0;
+        uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+        dest[j++] = encoding_table[(triple >> 3 * 6) & 0x3F];
+        dest[j++] = encoding_table[(triple >> 2 * 6) & 0x3F];
+        dest[j++] = encoding_table[(triple >> 1 * 6) & 0x3F];
+        dest[j++] = encoding_table[(triple >> 0 * 6) & 0x3F];
+      }
+      for (i = 0; i < mod_table[20 % 3]; ++i)
+      {
+        dest[28 - 1 - i] = '=';
+      }
+    }
+
   } // namespace helpers
 
   struct Cookie
@@ -158,11 +311,23 @@ namespace wafflepp
       }
     }
 
+    std::string header(const char *key) const
+    {
+      const auto raw = http_request_header(request, key);
+      if (raw.buf == nullptr || raw.len == 0)
+      {
+        return "";
+      }
+      else
+      {
+        return std::string(raw.buf, raw.len);
+      }
+    }
+
   private:
     void parseContentType()
     {
-      const auto raw = http_request_header(request, "Content-Type");
-      content_type = std::string(raw.buf, raw.len);
+      const auto content_type = header("Content-Type");
       if (content_type == "application/json")
       {
         is_json = true;
@@ -525,7 +690,7 @@ namespace wafflepp
     }
 
   private:
-    std::string buildCookieString()
+    std::string buildCookieString() const
     {
       const std::size_t num_cookies(cookies.size());
       if (num_cookies == 0)
@@ -555,6 +720,151 @@ namespace wafflepp
       }
 
       return cookie_str.str();
+    }
+  };
+
+  constexpr const char *MAGIC{"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"};
+
+  struct WebSocket
+  {
+    struct Message
+    {
+      std::string data{};
+      int type{-1};
+      int code{-1};
+    };
+
+    static const int TYPE_CONTINUATION{0x0};
+    static const int TYPE_TEXT{0x1};
+    static const int TYPE_BINARY{0x2};
+    static const int TYPE_CLOSE{0x3};
+    static const int TYPE_PING{0x4};
+    static const int TYPE_PONG{0x5};
+
+    void open(const std::unique_ptr<Request> &req, const std::unique_ptr<Response> &res)
+    {
+      if (req->header("Upgrade") != "websocket")
+      {
+        res->status(403)->body("Can upgrade only to websocket")->finish(req);
+        return;
+      }
+
+      const std::string &origin = req->header("Origin");
+      if (!origin.empty() && !this->checkorigin(origin))
+      {
+        res->status(403)->body("Cross origin websockets not allowed")->finish(req);
+        return;
+      }
+      else
+      {
+        const std::string &ws_origin = req->header("Sec-WebSocket-Origin");
+
+        if (!ws_origin.empty() && !this->checkorigin(ws_origin))
+        {
+          res->status(403)->body("Cross origin websockets not allowed")->finish(req);
+          return;
+        }
+      }
+
+      const std::string &protocol = req->header("Sec-WebSocket-Protocol");
+      if (!protocol.empty())
+      {
+        const auto pos_comma = protocol.find(",");
+        const auto first_proto = protocol.substr(0, pos_comma);
+        res->header("Sec-WebSocket-Protocol", first_proto.c_str());
+      }
+
+      const std::string &key = req->header("Sec-WebSocket-Key");
+      const std::string outkey{key + MAGIC};
+      std::array<char, 28> b64 = {0};
+      helpers::sha1b64(outkey.c_str(), b64.data());
+
+      res
+          ->status(101)
+          ->body("")
+          ->header("Upgrade", "websocket")
+          ->header("Connection", "Upgrade")
+          ->header("Sec-WebSocket-Accept", b64.data())
+          ->finish(req);
+
+      if (res->finished)
+      {
+        try
+        {
+          this->onopen(req);
+          opened = true;
+        }
+        catch (...)
+        {
+        }
+      }
+
+      // TODO listen for socket updates
+    };
+
+    void close(int code = 0, const std::string &msg = "")
+    {
+      if (!opened)
+      {
+        return;
+      }
+      try
+      {
+        this->onclose(); // how to pass req?
+      }
+      catch (...)
+      {
+        return;
+      }
+
+      std::string payload{};
+      if (code && code < 0x7fff)
+      {
+        int sentinel = ((code >> 8) & 0xff) & (code & 0xff);
+        payload = (char)sentinel + msg;
+      }
+
+      this->sendFrame(true, 0x8, payload);
+
+      // TODO close socket
+    }
+
+    void write(const std::string &data, bool binary = false) const
+    {
+      if (!opened)
+      {
+        return;
+      }
+      this->sendFrame(true, binary ? 0x2 : 0x1, data);
+    }
+
+    void ping(const std::string &data) const
+    {
+      if (!opened)
+      {
+        return;
+      }
+      this->sendFrame(true, 0x9, data);
+    }
+
+    bool opened{false};
+    std::function<bool(const std::string &)> checkorigin{};
+    std::function<void(const std::unique_ptr<Request> &)> onopen{};
+    std::function<void(const Message &)> onmessage{};
+    std::function<void(const Message &)> onpong{};
+    std::function<void(/*const std::unique_ptr<Request> &*/)> onclose{};
+
+  private:
+    void sendFrame(bool finish, int opcode, const std::string &payload,
+                   std::size_t maxlen = 65535, bool mask = false) const
+    {
+      (void)finish;
+      (void)opcode;
+      (void)payload;
+      (void)maxlen;
+      (void)mask;
+
+      // TODO build and send message
     }
   };
 
@@ -663,6 +973,26 @@ namespace wafflepp
     ADD_METHOD(patch, PATCH)
     ADD_METHOD(put, PUT)
     ADD_METHOD(options, OPTIONS)
+
+    using WebSocketCallback = std::function<void(const std::unique_ptr<wafflepp::WebSocket> &)>;
+    void ws(const char *url, const WebSocketCallback &cb)
+    {
+      get(url, [&cb](const std::unique_ptr<wafflepp::Request> &req,
+                     const std::unique_ptr<wafflepp::Response> &res) {
+        auto ws = std::make_unique<WebSocket>();
+
+        try
+        {
+          cb(ws);
+          ws->open(req, res);
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        catch (const std::exception &err)
+        {
+          res->abort(500, err.what())->finish(req);
+        }
+      });
+    }
   };
 
 } // namespace wafflepp
@@ -713,12 +1043,10 @@ int main()
            });
 
   app.get("/error",
-          [](const std::unique_ptr<wafflepp::Request> &req,
-             const std::unique_ptr<wafflepp::Response> &res) {
+          [](const std::unique_ptr<wafflepp::Request> &,
+             const std::unique_ptr<wafflepp::Response> &) {
             int a = std::stoi(" "); // force an error
             (void)a;
-            (void)req;
-            (void)res;
           });
 
   app.post("/form",
@@ -775,6 +1103,65 @@ int main()
                             {{"type", "submit"}}, "Upload"))))))
                 ->finish(req);
           });
+
+  app.get("/ws",
+          [](const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res) {
+            const char *js =
+                "var ws = new WebSocket(\"ws://localhost:8080/iws\");\n"
+                "function print() { console.log(ws.readyState); }\n"
+                "ws.onopen = function()\n"
+                "{\n"
+                "  console.log(\"opened\");\n"
+                "  print();\n"
+                "  ws.send(\"Hello\");\n"
+                "}\n"
+                "ws.onmessage = function(msg)\n"
+                "{\n"
+                "  console.log(msg);\n"
+                "  setTimeout(function() { ws.close(); }, 1000);\n"
+                "}\n"
+                "ws.onclose = function(event)\n"
+                "{\n"
+                "  console.log(event);\n"
+                "  console.log(\"closed\");\n"
+                "  print();\n"
+                "\n}";
+
+            using namespace htmlpp;
+            res
+                ->content("text/html")
+                ->body(
+                    html(body(
+                        p("Hello, World"),
+                        script({{"type", "text/javascript"}}, js))))
+                ->finish(req);
+          });
+
+  app.ws("/iws",
+         [](const std::unique_ptr<wafflepp::WebSocket> &ws) {
+           ws->checkorigin = [](const std::string &origin) {
+             return origin == "http://localhost:8080";
+           };
+
+           ws->onopen = [](const std::unique_ptr<wafflepp::Request> &) {
+             std::cout << "/ws/opened" << std::endl;
+           };
+
+           ws->onmessage = [&ws](const wafflepp::WebSocket::Message &data) {
+             std::cout << data.data << std::endl;
+             ws->write(data.data);
+             ws->ping("test");
+           };
+
+           ws->onpong = [](const wafflepp::WebSocket::Message &data) {
+             std::cout << data.data << std::endl;
+           };
+
+           ws->onclose = [](/*const std::unique_ptr<wafflepp::Request> &*/) {
+             std::cout << "/ws/closed" << std::endl;
+           };
+         });
 
   app.listen(8080);
 }
