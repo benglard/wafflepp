@@ -9,7 +9,9 @@
 ```c++
 int main()
 {
-  wafflepp::Server app;
+  auto cookie_session = std::make_unique<wafflepp::CookieSession>();
+
+  wafflepp::Server app(std::move(cookie_session));
 
   app.get("/([0-9]+)",
           [](const std::unique_ptr<wafflepp::Request> &req,
@@ -65,6 +67,18 @@ int main()
                 ->finish(req);
           });
 
+  app.get("/sesh",
+          [&app](const std::unique_ptr<wafflepp::Request> &req,
+                 const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            const auto &n = app.session->get(req, res, "test", "0");
+            res
+                ->content("text/html")
+                ->body(html(body("n = ", n)))
+                ->finish(req);
+            app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
+          });
+
   app.listen(8080);
 }
 ```
@@ -79,4 +93,9 @@ int main()
 - JSON parsing/responses
 - Form parsing
 - HTML rendering API
+- In-memory/cookie sessions
 - Minimal error handling
+
+## TODO
+
+- Websockets
