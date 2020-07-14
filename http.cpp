@@ -11,6 +11,7 @@
 #include <functional>
 #include <csignal>
 #include <regex>
+#include <random>
 
 namespace wafflepp
 {
@@ -63,6 +64,45 @@ namespace wafflepp
       }
       return result;
     }
+
+    inline std::string uuid4()
+    {
+      static std::random_device rd;
+      static std::mt19937 gen(rd());
+      static std::uniform_int_distribution<> dis(0, 15);
+      static std::uniform_int_distribution<> dis2(8, 11);
+
+      std::stringstream ss;
+      int i;
+      ss << std::hex;
+      for (i = 0; i < 8; i++)
+      {
+        ss << dis(gen);
+      }
+      ss << "-";
+      for (i = 0; i < 4; i++)
+      {
+        ss << dis(gen);
+      }
+      ss << "-4";
+      for (i = 0; i < 3; i++)
+      {
+        ss << dis(gen);
+      }
+      ss << "-";
+      ss << dis2(gen);
+      for (i = 0; i < 3; i++)
+      {
+        ss << dis(gen);
+      }
+      ss << "-";
+      for (i = 0; i < 12; i++)
+      {
+        ss << dis(gen);
+      };
+      return ss.str();
+    }
+
   } // namespace helpers
 
   struct Cookie
@@ -626,10 +666,93 @@ namespace wafflepp
     }
   } // namespace helpers
 
+  struct BaseSession
+  {
+    virtual std::string get(const std::unique_ptr<wafflepp::Request> &req,
+                            const std::unique_ptr<wafflepp::Response> &res,
+                            const std::string &key,
+                            const std::string &default_value) = 0;
+
+    virtual void set(const std::unique_ptr<wafflepp::Request> &req,
+                     const std::unique_ptr<wafflepp::Response> &res,
+                     const std::string &key,
+                     const std::string &value) = 0;
+
+    virtual void deleteKey(const std::unique_ptr<wafflepp::Request> &req,
+                           const std::unique_ptr<wafflepp::Response> &res,
+                           const std::string &key) = 0;
+
+    virtual void flush(const std::unique_ptr<wafflepp::Request> &req,
+                       const std::unique_ptr<wafflepp::Response> &res) = 0;
+
+  protected:
+    std::string uid(const std::unique_ptr<wafflepp::Request> &req,
+                    const std::unique_ptr<wafflepp::Response> &res) const
+    {
+      constexpr const char *KEY{"sid"};
+
+      const auto &cookie = req->cookies.find(KEY);
+      if (cookie == req->cookies.end())
+      {
+        const auto &id = helpers::uuid4();
+        res->cookie(KEY, id);
+        return id;
+      }
+      else
+      {
+        return cookie->second;
+      }
+    }
+  };
+
+  struct MemorySession : public BaseSession
+  {
+    std::string get(const std::unique_ptr<wafflepp::Request> &req,
+                    const std::unique_ptr<wafflepp::Response> &res,
+                    const std::string &key,
+                    const std::string &default_value) override
+    {
+      auto &db = data_[uid(req, res)];
+      const auto &val = db.find(key);
+      if (val == db.end())
+      {
+        return default_value;
+      }
+      else
+      {
+        return val->second;
+      }
+    }
+
+    void set(const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res,
+             const std::string &key,
+             const std::string &value) override
+    {
+      data_[uid(req, res)][key] = value;
+    }
+
+    void deleteKey(const std::unique_ptr<wafflepp::Request> &req,
+                   const std::unique_ptr<wafflepp::Response> &res,
+                   const std::string &key) override
+    {
+      data_[uid(req, res)].erase(key);
+    }
+
+    void flush(const std::unique_ptr<wafflepp::Request> &req,
+               const std::unique_ptr<wafflepp::Response> &res) override
+    {
+      data_[uid(req, res)].clear();
+    }
+
+  private:
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> data_{};
+  };
+
   struct Server
   {
   public:
-    Server(){};
+    Server(std::unique_ptr<BaseSession> &&sess) : session(std::move(sess)) {}
 
     void listen(int port)
     {
@@ -663,6 +786,8 @@ namespace wafflepp
     ADD_METHOD(patch, PATCH)
     ADD_METHOD(put, PUT)
     ADD_METHOD(options, OPTIONS)
+
+    std::unique_ptr<BaseSession> session;
   };
 
 } // namespace wafflepp
@@ -676,7 +801,9 @@ inline int fib(int n)
 
 int main()
 {
-  wafflepp::Server app;
+  auto memory_session = std::make_unique<wafflepp::MemorySession>();
+
+  wafflepp::Server app(std::move(memory_session));
 
   app.get("/([0-9]+)",
           [](const std::unique_ptr<wafflepp::Request> &req,
@@ -774,6 +901,18 @@ int main()
                         p(input(
                             {{"type", "submit"}}, "Upload"))))))
                 ->finish(req);
+          });
+
+  app.get("/sesh",
+          [&app](const std::unique_ptr<wafflepp::Request> &req,
+                 const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            const auto &n = app.session->get(req, res, "test", "0");
+            res
+                ->content("text/html")
+                ->body(html(body("n = ", n)))
+                ->finish(req);
+            app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
           });
 
   app.listen(8080);

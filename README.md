@@ -65,6 +65,18 @@ int main()
                 ->finish(req);
           });
 
+  app.get("/sesh",
+          [&app](const std::unique_ptr<wafflepp::Request> &req,
+                 const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            const auto &n = app.session->get(req, res, "test", "0");
+            res
+                ->content("text/html")
+                ->body(html(body("n = ", n)))
+                ->finish(req);
+            app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
+          });
+
   app.listen(8080);
 }
 ```
@@ -79,4 +91,10 @@ int main()
 - JSON parsing/responses
 - Form parsing
 - HTML rendering API
+- In-memory sessions
 - Minimal error handling
+
+## TODO
+
+- Cookie sessions
+- Websockets
