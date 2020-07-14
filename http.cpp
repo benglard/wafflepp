@@ -198,6 +198,20 @@ namespace wafflepp
       }
     }
 
+    std::string cookie(const std::string &key,
+                       const std::string &default_value)
+    {
+      const auto &val = cookies.find(key);
+      if (val == cookies.end())
+      {
+        return default_value;
+      }
+      else
+      {
+        return val->second;
+      }
+    }
+
   private:
     void parseContentType()
     {
@@ -267,6 +281,7 @@ namespace wafflepp
     {
       const auto raw = http_request_header(request, "cookie");
       const auto cookie = std::string(raw.buf, raw.len);
+
       auto start = 0;
       while (start < raw.len)
       {
@@ -288,7 +303,13 @@ namespace wafflepp
 
         const auto &value = cookie.substr(start, pos_semi - start);
 
-        cookies[key] = value;
+        auto trim_key{key};
+        // trim leading spaces
+        trim_key.erase(trim_key.begin(), std::find_if(trim_key.begin(), trim_key.end(), [](int ch) {
+                         return !std::isspace(ch);
+                       }));
+
+        cookies[trim_key] = value;
 
         start = pos_semi + 1;
       }
@@ -563,6 +584,14 @@ namespace wafflepp
       }
       return this;
     }
+    Response *clearCookies(const std::unordered_map<std::string, std::string> &cookies)
+    {
+      for (const auto &cookie : cookies)
+      {
+        deleteCookie(cookie.first);
+      }
+      return this;
+    }
 
   private:
     std::string buildCookieString()
@@ -690,9 +719,9 @@ namespace wafflepp
                     const std::unique_ptr<wafflepp::Response> &res) const
     {
       constexpr const char *KEY{"sid"};
-
-      const auto &cookie = req->cookies.find(KEY);
-      if (cookie == req->cookies.end())
+      constexpr const char *DEFAULT{""};
+      const auto &cookie = req->cookie(KEY, DEFAULT);
+      if (cookie.empty())
       {
         const auto &id = helpers::uuid4();
         res->cookie(KEY, id);
@@ -700,7 +729,7 @@ namespace wafflepp
       }
       else
       {
-        return cookie->second;
+        return cookie;
       }
     }
   };
@@ -747,6 +776,41 @@ namespace wafflepp
 
   private:
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> data_{};
+  };
+
+  struct CookieSession : public BaseSession
+  {
+    std::string get(const std::unique_ptr<wafflepp::Request> &req,
+                    const std::unique_ptr<wafflepp::Response> &res,
+                    const std::string &key,
+                    const std::string &default_value) override
+    {
+      (void)res;
+      return req->cookie(key, default_value);
+    }
+
+    void set(const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res,
+             const std::string &key,
+             const std::string &value) override
+    {
+      (void)req;
+      res->cookie(key, value);
+    }
+
+    void deleteKey(const std::unique_ptr<wafflepp::Request> &req,
+                   const std::unique_ptr<wafflepp::Response> &res,
+                   const std::string &key) override
+    {
+      (void)req;
+      res->deleteCookie(key);
+    }
+
+    void flush(const std::unique_ptr<wafflepp::Request> &req,
+               const std::unique_ptr<wafflepp::Response> &res) override
+    {
+      res->clearCookies(req->cookies);
+    }
   };
 
   struct Server
@@ -802,8 +866,9 @@ inline int fib(int n)
 int main()
 {
   auto memory_session = std::make_unique<wafflepp::MemorySession>();
+  auto cookie_session = std::make_unique<wafflepp::CookieSession>();
 
-  wafflepp::Server app(std::move(memory_session));
+  wafflepp::Server app(std::move(cookie_session));
 
   app.get("/([0-9]+)",
           [](const std::unique_ptr<wafflepp::Request> &req,
@@ -908,11 +973,11 @@ int main()
                  const std::unique_ptr<wafflepp::Response> &res) {
             using namespace htmlpp;
             const auto &n = app.session->get(req, res, "test", "0");
+            app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
             res
                 ->content("text/html")
                 ->body(html(body("n = ", n)))
                 ->finish(req);
-            app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
           });
 
   app.listen(8080);

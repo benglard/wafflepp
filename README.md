@@ -9,7 +9,9 @@
 ```c++
 int main()
 {
-  wafflepp::Server app;
+  auto cookie_session = std::make_unique<wafflepp::CookieSession>();
+
+  wafflepp::Server app(std::move(cookie_session));
 
   app.get("/([0-9]+)",
           [](const std::unique_ptr<wafflepp::Request> &req,
@@ -91,10 +93,9 @@ int main()
 - JSON parsing/responses
 - Form parsing
 - HTML rendering API
-- In-memory sessions
+- In-memory/cookie sessions
 - Minimal error handling
 
 ## TODO
 
-- Cookie sessions
 - Websockets
