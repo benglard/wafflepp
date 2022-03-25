@@ -960,6 +960,8 @@ namespace wafflepp
       const auto req = std::make_unique<Request>(request);
       const auto res = std::make_unique<Response>();
 
+      std::cout << req->url << std::endl;
+
       for (const auto &patterns : callbacks)
       {
         if (matchURL(patterns.first, req))
@@ -1171,6 +1173,8 @@ namespace wafflepp
           cb(ws);
           ws->open(req, res);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          req->request->handler = web_socket_handler;
+          // server->handler = web_socket_handler;
         }
         catch (const std::exception &err)
         {
@@ -1304,7 +1308,7 @@ int main()
                 "{\n"
                 "  console.log(\"opened\");\n"
                 "  print();\n"
-                "  ws.send(\"Hello\");\n"
+                "  setTimeout(function() { console.log(\"sending\"); ws.send(\"Hello\"); }, 1000);\n"
                 "}\n"
                 "ws.onmessage = function(msg)\n"
                 "{\n"
