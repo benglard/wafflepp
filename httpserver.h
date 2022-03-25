@@ -1182,7 +1182,7 @@ char const * status_text[] = {
 
   //500s
   "Internal Server Error", "Not Implemented", "Bad Gateway", "Service Unavailable",
-  "Gateway Timeout", "", "", "", "", ""
+  "Gateway Timeout", "", "", "", "", "",
 
   "", "", "", "", "", "", "", "", "", "",
   "", "", "", "", "", "", "", "", "", "",

@@ -714,6 +714,8 @@ namespace wafflepp
     virtual void flush(const std::unique_ptr<wafflepp::Request> &req,
                        const std::unique_ptr<wafflepp::Response> &res) = 0;
 
+    virtual ~BaseSession() = default;
+
   protected:
     std::string uid(const std::unique_ptr<wafflepp::Request> &req,
                     const std::unique_ptr<wafflepp::Response> &res) const
@@ -734,7 +736,7 @@ namespace wafflepp
     }
   };
 
-  struct MemorySession : public BaseSession
+  struct MemorySession final : public BaseSession
   {
     std::string get(const std::unique_ptr<wafflepp::Request> &req,
                     const std::unique_ptr<wafflepp::Response> &res,
@@ -778,7 +780,7 @@ namespace wafflepp
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> data_{};
   };
 
-  struct CookieSession : public BaseSession
+  struct CookieSession final : public BaseSession
   {
     std::string get(const std::unique_ptr<wafflepp::Request> &req,
                     const std::unique_ptr<wafflepp::Response> &res,
