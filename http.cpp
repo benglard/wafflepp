@@ -537,11 +537,23 @@ namespace wafflepp
     {
       return this->content("application/json")->body(json.dump());
     }
+    Response *json()
+    {
+      return this->content("application/json");
+    }
+    Response *json(std::string &&str)
+    {
+      return this->content("application/json")->body(std::move(str));
+    }
+    Response *json(const std::string &str)
+    {
+      return this->content("application/json")->body(str);
+    }
     Response *abort(int status, const std::string &description = "")
     {
       if (description.empty())
       {
-        this->body(status_text[status]);
+        this->body(hs_status_text[status]);
       }
       else
       {
@@ -896,7 +908,8 @@ int main()
   app.get("/json",
           [](const std::unique_ptr<wafflepp::Request> &req,
              const std::unique_ptr<wafflepp::Response> &res) {
-            res->json({{"key", "value"}})->finish(req);
+            nlohmann::json j{{"key", "value"}, {"k2", "v2"}};
+            res->json(j.dump())->finish(req);
           });
 
   app.post("/json",
