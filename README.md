@@ -7,8 +7,29 @@
 ## Examples
 
 ```c++
-int main()
+#define HTTPSERVER_IMPL
+#include "wafflepp.h"
+#include <csignal>
+
+struct http_server_s *server{nullptr};
+
+void exitHandler(int signal)
 {
+  std::cout << "exiting with signal " << signal << std::endl;
+  free(server);
+  exit(0);
+}
+
+inline int fib(int n)
+{
+  if (n <= 1)
+    return n;
+  return fib(n - 1) + fib(n - 2);
+}
+
+int main(const int argc, const char** argv)
+{
+  auto memory_session = std::make_unique<wafflepp::MemorySession>();
   auto cookie_session = std::make_unique<wafflepp::CookieSession>();
 
   wafflepp::Server app(std::move(cookie_session));
@@ -37,7 +58,52 @@ int main()
   app.get("/json",
           [](const std::unique_ptr<wafflepp::Request> &req,
              const std::unique_ptr<wafflepp::Response> &res) {
-            res->json({{"key", "value"}})->finish(req);
+            nlohmann::json j{{"key", "value"}, {"k2", "v2"}};
+            res->json(j.dump())->finish(req);
+          });
+
+  app.post("/json",
+           [](const std::unique_ptr<wafflepp::Request> &req,
+              const std::unique_ptr<wafflepp::Response> &res) {
+             std::cout << req->json << std::endl;
+             (void)res;
+           });
+
+  app.get("/error",
+          [](const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res) {
+            int a = std::stoi(" "); // force an error
+            (void)a;
+            (void)req;
+            (void)res;
+          });
+
+  app.post("/form",
+           [](const std::unique_ptr<wafflepp::Request> &req,
+              const std::unique_ptr<wafflepp::Response> &res) {
+             for (const auto &item : req->form)
+             {
+               std::cout << item.first << ": "
+                         << item.second.data << " "
+                         << item.second.filename << " "
+                         << item.second.content_type
+                         << std::endl;
+             }
+
+             res->body("Uploaded!")->finish(req);
+           });
+
+  app.get("/render",
+          [](const std::unique_ptr<wafflepp::Request> &req,
+             const std::unique_ptr<wafflepp::Response> &res) {
+            using namespace htmlpp;
+            res
+                ->content("text/html")
+                ->body(
+                    html(
+                        head(title("Title")),
+                        body(p("Hello World!"))))
+                ->finish(req);
           });
 
   app.get("/form",
@@ -45,8 +111,7 @@ int main()
              const std::unique_ptr<wafflepp::Response> &res) {
             using namespace htmlpp;
             res
-                ->content("text/html")
-                ->body(
+                ->html(
                     html(body(form(
                         {{"action", "/form"},
                          {"method", "POST"},
@@ -72,14 +137,19 @@ int main()
                  const std::unique_ptr<wafflepp::Response> &res) {
             using namespace htmlpp;
             const auto &n = app.session->get(req, res, "test", "0");
-            res
-                ->content("text/html")
-                ->body(html(body("n = ", n)))
-                ->finish(req);
             app.session->set(req, res, "test", std::to_string(std::stoi(n) + 1));
+            res->html(html(body("n = ", n)))->finish(req);
           });
 
-  app.listen(8080);
+  signal(SIGTERM, exitHandler);
+  signal(SIGINT, exitHandler);
+
+  int port{8000};
+  if (argc > 1) {
+    port = std::stoi(argv[1]);
+  }
+  std::cout << "Listening on port " << port << std::endl;
+  app.listen(server, port);
 }
 ```
 
